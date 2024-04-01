@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+#include <stdlib.h>
+
+#define TICK_RATE 60
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -96,8 +99,88 @@ bool win32_compare_addr(Win32Addr* a, Win32Addr *b)
     return false;
 }
 
+struct ServerState
+{
+    Win32Addr last;
+    char buffer[256];
+};
+
+ServerState* create_server_state(i32 sock, ADDRINFOA *server)
+{
+    if (bind(sock, server->ai_addr, server->ai_addrlen)) {
+        assert(0);
+    }
+    printf("Bound to port.\n");
+
+    ServerState *state = (ServerState*) malloc(sizeof(ServerState));
+    *state = {};
+
+    return state;
+}
+
+void create_client_state(i32 sock, ADDRINFOA *server)
+{
+    if (connect(sock, server->ai_addr, server->ai_addrlen)) {
+        win32_check_socket_error();
+        assert(0);
+    }
+
+    printf("Connected to server.\n");
+
+    char message[] = "----Hello world this is being sent via udp";
+    u32 *header = (u32*) message;
+    *header = 12346;
+    i32 bytes_sent = send(sock, message, sizeof(message), 0);
+    printf("%d bytes sent\n", bytes_sent);
+    bytes_sent = send(sock, message, sizeof(message), 0);
+}
+
+void do_server_things(i32 sock, ServerState *state) 
+{
+    u32 *header = (u32*) state->buffer;
+    char *message = state->buffer + 4;
+    Win32Addr from;
+    i32 from_len = sizeof(from);
+
+    while (true) {
+        i32 bytes_read = recvfrom(sock, state->buffer, sizeof(state->buffer), 0, 
+                                  (SOCKADDR*) &from, &from_len);
+        if (bytes_read == -1) {
+            win32_check_socket_error();
+            break;
+        }
+        if (bytes_read > 0) {
+            // Check if message starts with magic number
+            if (bytes_read <= 4) {
+                continue;
+            }
+            if ((*header) != 12346) {
+                continue;
+            }
+
+            printf("---------------------------------\n");
+            if (!win32_compare_addr(&state->last, &from)) {
+                printf("New client\n");
+            }
+            printf("Received message:\n%s\nBytes read: %i\n", message, bytes_read);
+
+            state->last = from;
+        } else {
+            break;
+        }
+    }
+}
+
+void do_client_things()
+{
+}
+
 i32 main(i32 argc, char **argv)
 {
+    LARGE_INTEGER perf_count_freq_res;
+    QueryPerformanceFrequency(&perf_count_freq_res);
+    f64 perf_count_freq = perf_count_freq_res.QuadPart;
+
     bool is_server = argc != 1;
 
     if (is_server) {
@@ -124,57 +207,34 @@ i32 main(i32 argc, char **argv)
     i32 sock = socket(server->ai_family, server->ai_socktype, server->ai_protocol);
     assert(sock != -1);
 
-
+    void *state = NULL;
     if (is_server) {
-        if (bind(sock, server->ai_addr, server->ai_addrlen)) {
-            assert(0);
-        }
-        printf("Bound to port.\n");
-
-        Win32Addr last = {};
-        char buffer[256];
-        u32 *header = (u32*) buffer;
-        char *message = buffer + 4;
-        Win32Addr from;
-        i32 from_len = sizeof(from);
-
-        while (true) {
-            i32 bytes_read = recvfrom(sock, buffer, sizeof(buffer), 0, (SOCKADDR*) &from, &from_len);
-            if (bytes_read == -1) {
-                win32_check_socket_error();
-            }
-            if (bytes_read > 0) {
-                // Check if message starts with magic number
-                if (bytes_read <= 4) {
-                    continue;
-                }
-                if ((*header) != 12346) {
-                    continue;
-                }
-
-                printf("---------------------------------\n");
-                if (!win32_compare_addr(&last, &from)) {
-                    printf("New client\n");
-                }
-                printf("Received message:\n%s\nBytes read: %i\n", message, bytes_read);
-
-                last = from;
-            }
-        }
+        state = create_server_state(sock, server);
     } else {
-        if (connect(sock, server->ai_addr, server->ai_addrlen)) {
-            win32_check_socket_error();
-            assert(0);
+        create_client_state(sock, server);
+    }
+
+    while (true) {
+        LARGE_INTEGER perf_start;
+        QueryPerformanceCounter(&perf_start);
+
+        if (is_server) {
+            do_server_things(sock, (ServerState*) state);
+        } else {
+            do_client_things();
         }
 
-        printf("Connected to server.\n");
-
-        char message[] = "----Hello world this is being sent via udp";
-        u32 *header = (u32*) message;
-        *header = 12346;
-        i32 bytes_sent = send(sock, message, sizeof(message), 0);
-        printf("%d bytes sent\n", bytes_sent);
-        bytes_sent = send(sock, message, sizeof(message), 0);
+        LARGE_INTEGER perf_end;
+        QueryPerformanceCounter(&perf_end);
+        f64 counter_elapsed = perf_end.QuadPart - perf_start.QuadPart;
+        f64 time_elapsed = counter_elapsed / perf_count_freq;
+        f64 time_to_sleep = ((1.0f / TICK_RATE) - time_elapsed) * 1000;
+        
+        if (time_to_sleep < 0) {
+            printf("Warning: Missed frame budget by %.02fms\n", time_to_sleep);
+            time_to_sleep = 0;
+        }
+        Sleep(time_to_sleep);
     }
 
     closesocket(sock);
