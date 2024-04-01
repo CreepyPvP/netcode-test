@@ -5,5 +5,5 @@ vim.keymap.set("n", "<", "<cmd>tabnew term://run_server.bat<CR>" ..
                           "<cmd>term run_client.bat<CR>");
 
 vim.keymap.set("n", "<A-c>", "<cmd>make<CR>");
-vim.keymap.set("n", "<A-o>", "<cmd>!devenv game.exe<CR>");
+vim.keymap.set("n", "<A-o>", "<cmd>!devenv client.exe<CR>");
 

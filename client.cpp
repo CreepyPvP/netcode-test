@@ -63,6 +63,40 @@ static void win32_check_socket_error()
     }   
 }
 
+union Win32Addr
+{
+    sockaddr addr;
+    sockaddr_in6 ipv6;
+    sockaddr_in ipv4;
+};
+
+bool win32_compare_addr(Win32Addr* a, Win32Addr *b)
+{
+    if (a->addr.sa_family != b->addr.sa_family) {
+        return false;
+    }
+
+    if (a->addr.sa_family == AF_INET) {
+        return a->ipv4.sin_port == b->ipv4.sin_port &&
+                a->ipv4.sin_addr.S_un.S_addr == b->ipv4.sin_addr.S_un.S_addr;
+    }
+    if (a->addr.sa_family == AF_INET6) {
+        if (a->ipv6.sin6_port != b->ipv6.sin6_port) {
+            return false;
+        }
+
+        for (u32 i = 0; i < 16; ++i) {
+            if (a->ipv6.sin6_addr.u.Byte[i] != b->ipv6.sin6_addr.u.Byte[i]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 i32 main(i32 argc, char **argv)
 {
     bool is_server = argc != 1;
@@ -91,22 +125,32 @@ i32 main(i32 argc, char **argv)
     i32 sock = socket(server->ai_family, server->ai_socktype, server->ai_protocol);
     assert(sock != -1);
 
+
     if (is_server) {
         if (bind(sock, server->ai_addr, server->ai_addrlen)) {
             assert(0);
         }
         printf("Bound to port.\n");
 
+        Win32Addr last = {};
         char buffer[256];
-        SOCKADDR_STORAGE from;
+        Win32Addr from;
         i32 from_len = sizeof(from);
-        i32 bytes_read = recvfrom(sock, buffer, sizeof(buffer), 0, (sockaddr*) &from, &from_len);
 
-        if (bytes_read == -1) {
-            win32_check_socket_error();
-        }
-        if (bytes_read > 0) {
-            printf("Received message:\n%s\nBytes read: %i,", buffer, bytes_read);
+        while (true) {
+            printf("---------------------------------\n");
+            i32 bytes_read = recvfrom(sock, buffer, sizeof(buffer), 0, (SOCKADDR*) &from, &from_len);
+            if (bytes_read == -1) {
+                win32_check_socket_error();
+            }
+            if (bytes_read > 0) {
+                if (!win32_compare_addr(&last, &from)) {
+                    printf("New client\n");
+                }
+                printf("Received message:\n%s\nBytes read: %i\n", buffer, bytes_read);
+
+                last = from;
+            }
         }
     } else {
         if (connect(sock, server->ai_addr, server->ai_addrlen)) {
@@ -116,9 +160,10 @@ i32 main(i32 argc, char **argv)
 
         printf("Connected to server.\n");
 
-        char *message = "Hello world this is being sent via udp";
+        char message[] = "Hello world this is being sent via udp";
         i32 bytes_sent = send(sock, message, sizeof(message), 0);
         printf("%d bytes sent\n", bytes_sent);
+        bytes_sent = send(sock, message, sizeof(message), 0);
     }
 
     closesocket(sock);
