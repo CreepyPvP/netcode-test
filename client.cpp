@@ -19,7 +19,6 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-
 static ADDRINFOA* win32_select_addr(ADDRINFOA *addr)
 {
     ADDRINFOA *selected = NULL;
@@ -134,20 +133,30 @@ i32 main(i32 argc, char **argv)
 
         Win32Addr last = {};
         char buffer[256];
+        u32 *header = (u32*) buffer;
+        char *message = buffer + 4;
         Win32Addr from;
         i32 from_len = sizeof(from);
 
         while (true) {
-            printf("---------------------------------\n");
             i32 bytes_read = recvfrom(sock, buffer, sizeof(buffer), 0, (SOCKADDR*) &from, &from_len);
             if (bytes_read == -1) {
                 win32_check_socket_error();
             }
             if (bytes_read > 0) {
+                // Check if message starts with magic number
+                if (bytes_read <= 4) {
+                    continue;
+                }
+                if ((*header) != 12346) {
+                    continue;
+                }
+
+                printf("---------------------------------\n");
                 if (!win32_compare_addr(&last, &from)) {
                     printf("New client\n");
                 }
-                printf("Received message:\n%s\nBytes read: %i\n", buffer, bytes_read);
+                printf("Received message:\n%s\nBytes read: %i\n", message, bytes_read);
 
                 last = from;
             }
@@ -160,7 +169,9 @@ i32 main(i32 argc, char **argv)
 
         printf("Connected to server.\n");
 
-        char message[] = "Hello world this is being sent via udp";
+        char message[] = "----Hello world this is being sent via udp";
+        u32 *header = (u32*) message;
+        *header = 12346;
         i32 bytes_sent = send(sock, message, sizeof(message), 0);
         printf("%d bytes sent\n", bytes_sent);
         bytes_sent = send(sock, message, sizeof(message), 0);
