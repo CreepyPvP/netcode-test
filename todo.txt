@@ -1,2 +1,8 @@
-detect unique clients
+correct for network endian
+
+ack numbers
+message resending
+
+timestep sync
+
 client timeout

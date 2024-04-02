@@ -102,8 +102,36 @@ bool win32_compare_addr(Win32Addr* a, Win32Addr *b)
 struct ServerState
 {
     Win32Addr last;
+};
+
+enum MessageType
+{
+    MT_Ping,
+};
+
+struct MessageHeader
+{
+    u32 magic_number;
+    MessageType type;
+};
+
+struct Message
+{
+    MessageHeader header;
     char buffer[256];
 };
+
+void win32_message_to_network(Message *message)
+{
+    message->header.magic_number = htonl(message->header.magic_number);
+    message->header.type = (MessageType) htonl(message->header.type);
+}
+
+void win32_message_to_host(Message *message)
+{
+    message->header.magic_number = ntohl(message->header.magic_number);
+    message->header.type = (MessageType) ntohl(message->header.type);
+}
 
 ServerState* create_server_state(i32 sock, ADDRINFOA *server)
 {
@@ -126,35 +154,29 @@ void create_client_state(i32 sock, ADDRINFOA *server)
     }
 
     printf("Connected to server.\n");
-
-    char message[] = "----Hello world this is being sent via udp";
-    u32 *header = (u32*) message;
-    *header = 12346;
-    i32 bytes_sent = send(sock, message, sizeof(message), 0);
-    printf("%d bytes sent\n", bytes_sent);
-    bytes_sent = send(sock, message, sizeof(message), 0);
 }
 
 void do_server_things(i32 sock, ServerState *state) 
 {
-    u32 *header = (u32*) state->buffer;
-    char *message = state->buffer + 4;
+    Message buffer;
     Win32Addr from;
     i32 from_len = sizeof(from);
 
     while (true) {
-        i32 bytes_read = recvfrom(sock, state->buffer, sizeof(state->buffer), 0, 
-                                  (SOCKADDR*) &from, &from_len);
+        i32 bytes_read = recvfrom(sock, (char*) &buffer, sizeof(buffer), 0, (SOCKADDR*) &from, &from_len);
         if (bytes_read == -1) {
             win32_check_socket_error();
             break;
         }
         if (bytes_read > 0) {
             // Check if message starts with magic number
-            if (bytes_read <= 4) {
+            if (bytes_read <= sizeof(buffer.header)) {
                 continue;
             }
-            if ((*header) != 12346) {
+
+            win32_message_to_host(&buffer);
+
+            if (buffer.header.magic_number != 12346) {
                 continue;
             }
 
@@ -162,7 +184,7 @@ void do_server_things(i32 sock, ServerState *state)
             if (!win32_compare_addr(&state->last, &from)) {
                 printf("New client\n");
             }
-            printf("Received message:\n%s\nBytes read: %i\n", message, bytes_read);
+            printf("Received message:\n%s\nBytes read: %i\n", buffer.buffer, bytes_read);
 
             state->last = from;
         } else {
@@ -171,8 +193,17 @@ void do_server_things(i32 sock, ServerState *state)
     }
 }
 
-void do_client_things()
+void do_client_things(i32 sock)
 {
+    Message buffer;
+    buffer.header.magic_number = 12346;
+    buffer.header.type = MT_Ping;
+    strcpy(buffer.buffer, "Ping");
+
+    win32_message_to_network(&buffer);
+
+    i32 bytes_sent = send(sock, (char*) &buffer, sizeof(buffer.header) + 5, 0);
+    printf("%d bytes sent\n", bytes_sent);
 }
 
 i32 main(i32 argc, char **argv)
@@ -221,7 +252,7 @@ i32 main(i32 argc, char **argv)
         if (is_server) {
             do_server_things(sock, (ServerState*) state);
         } else {
-            do_client_things();
+            do_client_things(sock);
         }
 
         LARGE_INTEGER perf_end;
